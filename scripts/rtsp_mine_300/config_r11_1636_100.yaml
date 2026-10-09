@@ -1,0 +1,113 @@
+# R11-phase1: dahua1001636 单流定向 100 张 -> tmp/r11_pending (与 phase2 同目录, 合计 400)
+# 规则同 R10/R11 (weights 0956, merged12, require_weak, complexity 门槛不变)
+streams:
+- name: dahua1001636
+  url: rtsp://118.140.234.166:8554/dahua1001636
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: none
+model:
+  weights: runs/detect/yolo26m_merged12_20260928_0956/weights/best.pt
+  fallback: runs/detect/yolo26m_merged12_20260928_0956/weights/best.pt
+  imgsz: 960
+  conf_scoring: 0.3
+  conf_low: 0.18
+  conf_low_classes:
+  - LGV
+  - Container
+  - HGV
+  - Van
+  - Motorcycle
+  - MGV
+  conf_overrides: {}
+  device: 0
+classes: merged12
+names_merged12:
+- Coach
+- Franchised Bus
+- HGV
+- LGV
+- Light Bus
+- MGV
+- Motorcycle
+- PLB GMB
+- Private Car
+- Taxi
+- Van
+- Container
+class_targets:
+  LGV: 100
+  Motorcycle: 60
+sampling:
+  detect_interval: 1.5
+  min_save_interval: 15.0
+  unconditional_interval: 0.0
+  unconditional_max_ratio: 0.0
+  target_total: 100
+  phash_thresh: 8
+  gray_filter:
+    std_thresh: 12.0
+    sat_thresh: 12.0
+    chan_diff_thresh: 8.0
+complexity:
+  target_classes:
+  - Container
+  - LGV
+  - HGV
+  - Motorcycle
+  target_min_boxes: 4
+  motorcycle_singleton: false
+  weak_min_boxes: 4
+  weak_min_count: 2
+  focus_classes:
+  - LGV
+  - Motorcycle
+  focus_min_boxes: 3
+  focus_min_count: 2
+  no_weak_min_boxes: 4
+  no_weak_min_classes: 3
+clean_capture:
+  enabled: true
+  edge_margin: 2
+  min_box_area_frac: 0.0015
+  laplacian_var_min: 100.0
+scoring:
+  w_cls: 1.0
+  w_box: 0.3
+  rare_w:
+    LGV: 10.0
+    Container: 8.0
+    Motorcycle: 10.0
+    HGV: 4.0
+    Van: 6.0
+    MGV: 2.5
+    PLB GMB: 2.0
+    Coach: 1.5
+    Light Bus: 1.5
+    Franchised Bus: 0.5
+    Taxi: 0.2
+    Private Car: 0.1
+balance:
+  drop_empty: true
+  drop_single_private_car: true
+  require_weak: true
+  no_weak_max_ratio: 0.0
+  weak_classes:
+  - LGV
+  - Container
+  - HGV
+  - Van
+  - Motorcycle
+  - MGV
+  soft_cam_class_cap: 60
+  soft_cap_drop_prob: 0.8
+  strong_frame_caps:
+    Private Car: 40
+    Taxi: 30
+    MGV: 80
+    Franchised Bus: 20
+output:
+  dataset_dir: tmp/r11_pending
+  run_log_dir: output/rtsp_mine_300
+  json_mode: prelabel
+  jpeg_quality: 95
