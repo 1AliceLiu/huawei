@@ -1,5 +1,5 @@
 # train_merged12.py
-# dataset : dataset/batch_12.v8i.merged12.yolov11/splits  (12类, 逐类 train:val:test=7:2:1, group 无泄漏)
+# dataset : auto_check_dataset/clean_data  (12类, train:val:test=7:2:1, group 无泄漏, 仅用已审查数据)
 # results : runs/detect/yolo26m_merged12_<YYYYMMDD_HHMM>
 from datetime import datetime
 from pathlib import Path
@@ -18,17 +18,17 @@ def main():
 
     model = YOLO(str(ROOT / "yolo26m.pt"))
     model.train(
-        data=str(ROOT / "dataset/batch_12.v8i.merged12.yolov11/splits/data_train_pool.yaml"),
-        epochs=500,
-        patience=50,
-        imgsz=640,
+        data=str(ROOT / "auto_check_dataset/clean_data/data.yaml"),
+        epochs=120,
+        patience=25,
+        imgsz=960,
         batch=66,
         optimizer="MuSGD",
         momentum=0.9,
         warmup_bias_lr=0.0,
-        lr0=0.001,
+        lr0=0.0005,
         cos_lr=True,
-        device="0,1,2",
+        device="-1,-1",
         name=run_name,
         workers=4,
     )
