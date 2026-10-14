@@ -1,0 +1,191 @@
+# R7: 8 streams (R6 proven) + 2 new (1620 urban junction, 1636 R1 veteran) = 10,
+# weights 0956 (v14i+r2+r3+r4+r5+r6), target 300 -> tmp/r7_pending.
+# 2026-09-29 survey_0956_0929 (144 cands, 0956, 20s each) + 21 sample frames visual check:
+#   ADD: 1620 (real junction, box truck/PLB/van/car), 1636 (known-good, mixed+Taxi/MGV/Van/LGV/HGV)
+#   REJECT construction/FP: 1650,1103,1184,1143,1499,1483,1655,1122,1486,1526,1528,1625,2084,1229,1596,1303,1204
+#     (site trucks->HGV/Container FP, workers->Motorcycle FP); STATIC skip: 2487(parked van),1296(parked LGV)
+#   BORDERLINE not added: 1617 (road-works pit but live passing moto/truck traffic; enable if moto hungry)
+#   NOTE 2026-09-29: hwy dahua548/dahua866/dahua1003 (+variants) all RTSP 404, kept COMMENTED.
+# Eval 0956 vs 1001 (local 5060, imgsz640): val 0.8325/0.6761 (+2.3/+1.8pt), test 0.8295/0.6643 (+2.1/+1.5pt);
+# val LGV +13.3pt / MGV +5.4pt / Moto +1.2pt, test Moto +5.1pt / Van +1.7pt / LGV +6.3pt.
+streams:
+- name: dahua1001647
+  url: rtsp://118.140.234.166:8554/dahua1001647
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: none
+- name: dahua1001305
+  url: rtsp://118.140.234.166:8554/dahua1001305
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: none
+- name: dahua1001619
+  url: rtsp://118.140.234.166:8554/dahua1001619
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: auto-left
+- name: dahua500
+  url: rtsp://118.140.234.166:8554/dahua500
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: none
+- name: dahua1001527
+  url: rtsp://118.140.234.166:8554/dahua1001527
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: auto-left
+- name: dahua1001638
+  url: rtsp://118.140.234.166:8554/dahua1001638
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: none
+- name: dahua1001640
+  url: rtsp://118.140.234.166:8554/dahua1001640
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: none
+- name: dahua1001637
+  url: rtsp://118.140.234.166:8554/dahua1001637
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: none
+# --- R7 new (survey_0956_0929 + visual check 2026-09-29) ---
+- name: dahua1001620
+  url: rtsp://118.140.234.166:8554/dahua1001620
+  detect_interval: 1.0
+  min_save_interval: 15.0
+  crop: auto-left
+- name: dahua1001636
+  url: rtsp://118.140.234.166:8554/dahua1001636
+  detect_interval: 1.0
+  min_save_interval: 12.0
+  crop: none
+# --- borderline: 1617 road-works pit but live moto/truck traffic; uncomment if moto hungry ---
+# - name: dahua1001617
+#   url: rtsp://118.140.234.166:8554/dahua1001617
+#   detect_interval: 1.0
+#   min_save_interval: 15.0
+#   crop: none
+# --- highway 3 (server 404 on 2026-09-29, enable after registration) ---
+# - name: dahua548
+#   url: rtsp://118.140.234.166:8554/dahua548
+#   detect_interval: 1.0
+#   min_save_interval: 20.0
+#   crop: none
+# - name: dahua866
+#   url: rtsp://118.140.234.166:8554/dahua866
+#   detect_interval: 1.0
+#   min_save_interval: 20.0
+#   crop: none
+# - name: dahua1003
+#   url: rtsp://118.140.234.166:8554/dahua1003
+#   detect_interval: 1.0
+#   min_save_interval: 20.0
+#   crop: none
+model:
+  weights: runs/detect/yolo26m_merged12_20260928_0956/weights/best.pt
+  fallback: runs/detect/yolo26m_merged12_20260928_0956/weights/best.pt
+  imgsz: 960
+  conf_scoring: 0.3
+  conf_low: 0.18
+  conf_low_classes:
+  - LGV
+  - Container
+  - HGV
+  - Van
+  - Motorcycle
+  - MGV
+  conf_overrides: {}
+  device: 0
+classes: merged12
+names_merged12:
+- Coach
+- Franchised Bus
+- HGV
+- LGV
+- Light Bus
+- MGV
+- Motorcycle
+- PLB GMB
+- Private Car
+- Taxi
+- Van
+- Container
+class_targets:
+  LGV: 155
+  Motorcycle: 85
+sampling:
+  detect_interval: 1.5
+  min_save_interval: 15.0
+  unconditional_interval: 0.0
+  unconditional_max_ratio: 0.0
+  target_total: 300
+  phash_thresh: 8
+  gray_filter:
+    std_thresh: 12.0
+    sat_thresh: 12.0
+    chan_diff_thresh: 8.0
+complexity:
+  target_classes:
+  - Container
+  - LGV
+  - HGV
+  - Motorcycle
+  # 3 (was 4): survey@conf0.30 already conservative; production conf_low=0.18 finds more boxes.
+  # Lets 3-box rare-target frames (1620 LGV, 1184-type LGV/HGV) pass; Van/MGV bar stays 4.
+  target_min_boxes: 3
+  motorcycle_singleton: false
+  weak_min_boxes: 4
+  weak_min_count: 2
+  focus_classes:
+  - LGV
+  - Motorcycle
+  focus_min_boxes: 3
+  focus_min_count: 2
+  no_weak_min_boxes: 4
+  no_weak_min_classes: 3
+clean_capture:
+  enabled: true
+  edge_margin: 2
+  min_box_area_frac: 0.0015
+  laplacian_var_min: 100.0
+scoring:
+  w_cls: 1.0
+  w_box: 0.3
+  rare_w:
+    LGV: 10.0
+    Container: 8.0
+    Motorcycle: 10.0
+    HGV: 4.0
+    Van: 6.0
+    MGV: 2.5
+    PLB GMB: 2.0
+    Coach: 1.5
+    Light Bus: 1.5
+    Franchised Bus: 0.5
+    Taxi: 0.2
+    Private Car: 0.1
+balance:
+  drop_empty: true
+  drop_single_private_car: true
+  require_weak: true
+  no_weak_max_ratio: 0.0
+  weak_classes:
+  - LGV
+  - Container
+  - HGV
+  - Van
+  - Motorcycle
+  - MGV
+  soft_cam_class_cap: 60
+  soft_cap_drop_prob: 0.8
+  strong_frame_caps:
+    Private Car: 40
+    Taxi: 30
+    MGV: 80
+    Franchised Bus: 20
+output:
+  dataset_dir: tmp/r7_pending
+  run_log_dir: output/rtsp_mine_300
+  json_mode: prelabel
+  jpeg_quality: 95
