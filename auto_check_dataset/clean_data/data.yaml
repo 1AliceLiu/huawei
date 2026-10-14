@@ -1,0 +1,6 @@
+path: /workspaces/huawei/auto_check_dataset/clean_data
+train: train/images
+val: valid/images
+
+nc: 12
+names: ['Coach', 'Franchised Bus', 'HGV', 'LGV', 'Light Bus', 'MGV', 'Motorcycle', 'PLB GMB', 'Private Car', 'Taxi', 'Van', 'Container']
