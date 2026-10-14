@@ -5,10 +5,17 @@
 用法：
   python scripts/rtsp_mine_300/schedule_collect.py --out-dir dataset/rtsp_mine_v4_icc \
       --per-cycle 300 --period-hours 2
+  高速15路混采（collect_highway15.py，单实例 pid 锁）：
+  python scripts/rtsp_mine_300/schedule_collect.py \
+      --collect-script scripts/rtsp_mine_300/collect_highway15.py \
+      --config scripts/rtsp_mine_300/config_highway15.yaml \
+      --out-dir dataset/rtsp_mine_600_highway15_pending \
+      --per-cycle 300 --period-hours 2 --extra-args "--max-minutes 90"
 停止：在 <out-dir>/SCHEDULE_STOP 建任意文件（或结束进程）。
 """
 import argparse
 import csv
+import shlex
 import subprocess
 import sys
 import time
@@ -16,7 +23,6 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-COLLECT = ROOT / "scripts/rtsp_mine_300/collect.py"
 FILTER = ROOT / "scripts/rtsp_mine_300/filter_empty.py"
 
 
@@ -53,6 +59,10 @@ def post_filter(ds_arg: str, log):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="scripts/rtsp_mine_300/config.yaml")
+    ap.add_argument("--collect-script", default="scripts/rtsp_mine_300/collect.py",
+                    help="每轮执行的采集脚本（相对 ROOT 或绝对路径）")
+    ap.add_argument("--extra-args", default="",
+                    help="追加给采集脚本的额外参数，如 \"--max-minutes 90\"")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--per-cycle", type=int, default=300)
     ap.add_argument("--period-hours", type=float, default=2.0)
@@ -72,14 +82,20 @@ def main():
     (log_dir / "schedule.pid").write_text(str(__import__("os").getpid()), encoding="utf-8")
 
     py = sys.executable
+    collect = Path(args.collect_script)
+    if not collect.is_absolute():
+        collect = ROOT / collect
+    if not collect.is_file():
+        raise SystemExit(f"采集脚本不存在: {collect}")
+    extra = shlex.split(args.extra_args) if args.extra_args else []
     n = 0
     while args.cycles == 0 or n < args.cycles:
         n += 1
         t0 = time.time()
         log = log_dir / f"schedule_cycle{n:03d}_{datetime.now():%Y%m%d_%H%M%S}.log"
-        cmd = [py, str(COLLECT), "--config", args.config, "--target", str(args.per_cycle),
-               "--out-dir", args.out_dir, "--resume"]
-        print(f"[cycle {n}] {datetime.now():%F %T} start -> {log.name}", flush=True)
+        cmd = [py, str(collect), "--config", args.config, "--target", str(args.per_cycle),
+               "--out-dir", args.out_dir, "--resume"] + extra
+        print(f"[cycle {n}] {datetime.now():%F %T} start -> {log.name} :: {' '.join(cmd)}", flush=True)
         with open(log, "w", encoding="utf-8") as f:
             rc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT).returncode
         total = len(list((out / "images").glob("*.jpg")))

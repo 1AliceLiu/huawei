@@ -1,0 +1,80 @@
+# 2 路 dahua（dahua1000393 + dahua1001566），先采 400 张。
+# 规则沿用 config_highway15.yaml（弱类优先 + 复杂画面门槛 + soft-cap）。
+# ICC 4 路暂不可用：scripts/rtsp_mine_300/icc_credentials.json 已丢失（2026-10-08）。
+streams:
+  - {name: dahua1000393, url: "rtsp://118.140.234.166:8554/dahua1000393", detect_interval: 1.0, min_save_interval: 15.0, crop: none}
+  - {name: dahua1001566, url: "rtsp://118.140.234.166:8554/dahua1001566", detect_interval: 1.0, min_save_interval: 15.0, crop: none}
+
+model:
+  weights: "runs/detect/yolo26m_merged12_20260928_0956/weights/best.pt"
+  fallback: "runs/detect/yolo26m_merged12_20260922_0757/weights/best.pt"
+  imgsz: 960
+  conf_scoring: 0.30
+  conf_low: 0.12
+  conf_low_classes: ['LGV', 'Container', 'HGV', 'Van', 'Motorcycle', 'MGV']
+  conf_overrides:
+    Motorcycle: 0.35
+  device: 0
+
+classes: merged12
+names_merged12: ['Coach', 'Franchised Bus', 'HGV', 'LGV', 'Light Bus', 'MGV', 'Motorcycle', 'PLB GMB', 'Private Car', 'Taxi', 'Van', 'Container']
+
+sampling:
+  detect_interval: 1.0
+  min_save_interval: 15.0
+  unconditional_interval: 180.0
+  unconditional_max_ratio: 0.05
+  target_total: 400
+  phash_thresh: 8
+  car_only_max_ratio: 0.15
+  gray_filter:
+    std_thresh: 12.0
+    sat_thresh: 12.0
+    chan_diff_thresh: 8.0
+
+complexity:
+  ultra_keep_singleton: ['LGV', 'Container', 'Motorcycle', 'HGV']
+  min_boxes: 3
+  min_boxes_multiclass: 2
+
+clean_capture:
+  enabled: true
+  edge_margin: 2
+  min_box_area_frac: 0.0015
+  laplacian_var_min: 100.0
+
+scoring:
+  w_cls: 1.0
+  w_box: 0.3
+  rare_w:
+    Container: 8.0
+    LGV: 5.0
+    HGV: 5.0
+    Motorcycle: 3.0
+    Van: 3.0
+    MGV: 2.0
+    PLB GMB: 2.0
+    Coach: 1.5
+    Light Bus: 1.5
+    Franchised Bus: 0.5
+    Taxi: 0.2
+    Private Car: 0.1
+
+balance:
+  drop_empty: true
+  drop_single_private_car: true
+  require_weak: true
+  weak_classes: ['LGV', 'Container', 'HGV', 'Van', 'Motorcycle', 'MGV']
+  soft_cam_class_cap: 60
+  soft_cap_drop_prob: 0.8
+  strong_frame_caps:
+    Private Car: 40
+    Taxi: 30
+    MGV: 80
+    Franchised Bus: 20
+
+output:
+  dataset_dir: "dataset/rtsp_mine_400_2cam_pending"
+  run_log_dir: "output/rtsp_mine_300"
+  json_mode: prelabel
+  jpeg_quality: 95
