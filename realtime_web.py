@@ -54,6 +54,10 @@ class FrameHub:
         with self.lock:
             return self.jpeg
 
+    def get_with_seq(self):
+        with self.lock:
+            return self.seq, self.jpeg
+
 
 class AVStreamReader:
     """PyAV 抓流（与 main.py 一致），RTSP 兼容性通常好于 OpenCV。只保留最新帧。"""
@@ -256,11 +260,18 @@ class MJPEGHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
             self.end_headers()
             try:
+                last_seq, last_sent = -1, 0.0
                 while not STOP.is_set():
-                    data = self.hub.get()
+                    seq, data = self.hub.get_with_seq()
                     if data is None:
                         time.sleep(0.02)
                         continue
+                    now = time.time()
+                    # 只发新帧，并限制到 25fps，避免同一张 JPEG 被 3ms 循环刷爆带宽
+                    if seq == last_seq or now - last_sent < 1 / 25:
+                        time.sleep(0.005)
+                        continue
+                    last_seq, last_sent = seq, now
                     self.wfile.write(b"--frame\r\n")
                     self.wfile.write(b"Content-Type: image/jpeg\r\n")
                     self.wfile.write(b"Content-Length: %d\r\n\r\n" % len(data))

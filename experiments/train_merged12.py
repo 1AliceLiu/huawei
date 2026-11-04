@@ -1,6 +1,6 @@
 # train_merged12.py
-# dataset : auto_check_dataset/clean_data  (12类, train:val:test=7:2:1, group 无泄漏, 仅用已审查数据)
-# results : runs/detect/yolo26m_merged12_<YYYYMMDD_HHMM>
+# dataset : dataset/clean_part_batch_12.v8i.merged12.yolov11/mix_batch_12.v8i.merged1  (12类, 纯随机划分)
+# results : runs/detect/yolo26s_merged12_<YYYYMMDD_HHMM>
 from datetime import datetime
 from pathlib import Path
 
@@ -16,19 +16,22 @@ def main():
     current_time = datetime.now().strftime("%Y%m%d_%H%M")
     run_name = f"yolo26m_merged12_{current_time}"
 
+    # model = YOLO(str(ROOT / "yolo26m.pt"))
     model = YOLO(str(ROOT / "yolo26m.pt"))
     model.train(
-        data=str(ROOT / "auto_check_dataset/clean_data/data.yaml"),
+        data=str(ROOT / "dataset/clean_part_batch_12.v8i.merged12.yolov11/data.yaml"),
         epochs=120,
-        patience=25,
-        imgsz=960,
-        batch=66,
+        patience=15,
+        imgsz=1280,
+        batch=32,
+        seed=0,
         optimizer="MuSGD",
         momentum=0.9,
+        weight_decay=0.001,
         warmup_bias_lr=0.0,
         lr0=0.0005,
         cos_lr=True,
-        device="-1,-1",
+        device="2,1",
         name=run_name,
         workers=4,
     )

@@ -1,0 +1,7 @@
+path: /workspaces/huawei/dataset/clean_part_batch_12.v8i.merged12.yolov11
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 12
+names: ['Coach', 'Franchised Bus', 'HGV', 'LGV', 'Light Bus', 'MGV', 'Motorcycle', 'PLB GMB', 'Private Car', 'Taxi', 'Van', 'Container']
