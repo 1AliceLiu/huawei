@@ -1,0 +1,5 @@
+path: /workspaces/huawei/auto_check_dataset/data_cluster/vehicle_annotation_v2/input_yolo
+train: train/images
+val: train/images
+nc: 12
+names: ['Coach', 'Franchised Bus', 'HGV', 'LGV', 'Light Bus', 'MGV', 'Motorcycle', 'PLB GMB', 'Private Car', 'Taxi', 'Van', 'Container']

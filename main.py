@@ -9,7 +9,7 @@ from ultralytics import YOLO
 # ================= 配置参数 =================
 RTSP_URL = "rtsp://118.140.234.166:8554/dahua1000393"
 # RTSP_URL = "rtsp://118.140.234.166:8554/dahua1001620"
-MODEL_PATH = r"runs/detect/yolo26m_merged12_20261013_0935/weights/best.pt"
+MODEL_PATH = r"runs/detect/yolo26m_merged12_20261023_0346/weights/best.pt"
 CONF_THRES = 0.2
 DEVICE = 0
 
