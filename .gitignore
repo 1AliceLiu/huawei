@@ -31,3 +31,6 @@ atlas
 *.txt
 *.csv
 *.html
+!web/calibration.html
+camera_regions.json.lock
+temp/

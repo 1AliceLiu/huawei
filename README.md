@@ -37,7 +37,6 @@ truck
 | | Container（集装箱车） |
 
 
-tar -czvf NoSuit_cls_clean_aug_split.tar.gz ./dataset/NoSuit_cls_clean_aug_split
 tar -zxvf data.tar.gz
 
 ## 类别合并:batch_12 v9 (11类) -> v10 merge8 (8类)

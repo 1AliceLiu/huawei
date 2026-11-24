@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>区域标定 · 监控预览</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#10151d;color:#e5edf7;font:15px/1.6 system-ui,sans-serif}
+    header{padding:18px 24px;border-bottom:1px solid #334155}h1{font-size:21px;margin:5px 0}a{color:#93c5fd}
+    main{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;padding:20px;max-width:1800px;margin:auto}
+    .viewer{align-self:start;background:#05080d;border:1px solid #334155;border-radius:10px;overflow:hidden}
+    canvas{display:block;width:100%;height:auto;cursor:crosshair;touch-action:none}canvas:focus{outline:2px solid #60a5fa;outline-offset:-2px}
+    aside{background:#1b2533;padding:18px;border-radius:10px}h2{font-size:16px;margin:0 0 12px}
+    button{font:inherit;color:#e5edf7;background:#26364b;border:1px solid #52647e;border-radius:6px;padding:9px 12px;cursor:pointer}
+    button:hover{background:#354a65}button:disabled{opacity:.45;cursor:default}button[aria-pressed=true]{border-color:#60a5fa;background:#214876}
+    .modes{display:grid;gap:8px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}#save{background:#176846;width:100%;margin-top:18px}
+    p{margin:10px 0}.hint{color:#aabbd0;font-size:13px}#status{white-space:pre-wrap;padding:12px 16px;min-height:48px;margin:0;border-top:1px solid #334155}
+    #status[data-error=true]{color:#fda4af}.green{color:#6ee7b7}.orange{color:#fbbf24}.cyan{color:#67e8f9}
+    @media(max-width:850px){main{grid-template-columns:1fr;padding:12px}header{padding:12px}aside{order:2}}
+  </style>
+</head>
+<body>
+  <header><a href="/">← 返回监控预览</a><h1 id="title">区域标定</h1><span class="hint">在冻结的视频底图上绘制；保存后，图形会叠加到该摄像头的实时预览。</span></header>
+  <main>
+    <section class="viewer" aria-label="标定画面">
+      <canvas id="canvas" width="1280" height="720" tabindex="0" aria-label="鼠标点击画面绘制区域、计数线和方向箭头">请使用支持 Canvas 的浏览器。</canvas>
+      <p id="status" role="status" aria-live="polite">正在加载摄像头底图…</p>
+    </section>
+    <aside>
+      <h2>按顺序标定</h2>
+      <div class="modes">
+        <button data-mode="roi" aria-pressed="true" disabled><span class="green">①</span> 绘制 ROI 区域</button>
+        <button data-mode="line" aria-pressed="false" disabled><span class="orange">②</span> 绘制有限计数线</button>
+        <button data-mode="direction" aria-pressed="false" disabled><span class="cyan">③</span> 绘制通行方向</button>
+      </div>
+      <p id="instruction">ROI：沿目标道路边缘依次点击，点击起点或“完成区域”闭合。</p>
+      <div class="actions"><button id="close-roi" disabled>完成区域</button><button id="undo" disabled>撤销</button><button id="clear" disabled>清空重画</button></div>
+      <div class="actions"><button id="refresh" disabled>刷新底图</button></div>
+      <p class="hint">计数线：点击两个端点，横跨目标道路，整段位于 ROI 内。</p>
+      <p class="hint">方向：先点来车一侧，再点驶离一侧，箭头应穿越计数线方向。</p>
+      <p class="hint">重新选择绘制工具后，点击画面可重画该图形。支持 Ctrl / ⌘ + Z 撤销。</p>
+      <button id="save" disabled>保存标定</button>
+      <p id="saved-state" class="hint">尚未加载标定</p>
+      <p class="hint">仅保存区域与线的位置；本页不累计车流量。转动摄像头或变焦后请重新标定。</p>
+    </aside>
+  </main>
+  <script src="/calibration.js"></script>
+</body>
+</html>
