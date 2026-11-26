@@ -27,12 +27,18 @@ os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 import cv2
 import numpy as np
 import torch
+
+# OpenCV's default thread pool multiplies across ten preview/recording threads.
+cv2.setNumThreads(1)
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ultralytics import YOLO
 from region_calibration import (
     CalibrationHandlerMixin, CalibrationStore, calibration_matches_frame, camera_key,
 )
+from stage_timing import METRICS
 from traffic_api import EventStore, TrafficCamera, TrafficHandlerMixin
+from video_recorder import VideoRecorder
+from traffic_push import CountsPublisher
 
 try:
     import av
@@ -52,6 +58,19 @@ class FrameHub:
         self.jpeg = None
         self.seq = 0
         self.raw_frame = None
+        self.viewers = 0
+
+    def viewer_enter(self):
+        with self.lock:
+            self.viewers += 1
+
+    def viewer_leave(self):
+        with self.lock:
+            self.viewers = max(0, self.viewers - 1)
+
+    def has_viewers(self):
+        with self.lock:
+            return self.viewers > 0
 
     def set_raw(self, frame):
         with self.lock:
@@ -89,9 +108,11 @@ class FrameHub:
 class AVStreamReader:
     """PyAV 抓流，可使用 CUDA/NVDEC 解码；后台只保留最新帧。"""
 
-    def __init__(self, url, hwaccel=None):
+    def __init__(self, url, hwaccel=None, sample_fps=0):
         self.url = url
         self.hwaccel = hwaccel
+        self.sample_interval = 1.0 / float(sample_fps) if sample_fps and sample_fps > 0 else 0.0
+        self.last_sample = 0.0
         self.container = None
         self.lock = threading.Lock()
         self.frame = None
@@ -129,7 +150,14 @@ class AVStreamReader:
                 for f in self.container.decode(video=0):
                     if STOP.is_set():
                         break
+                    if self.sample_interval:
+                        now = time.monotonic()
+                        if now - self.last_sample < self.sample_interval:
+                            continue
+                        self.last_sample = now
+                    started = time.perf_counter()
                     img = f.to_ndarray(format="bgr24")
+                    METRICS.add("ndarray", time.perf_counter() - started)
                     with self.lock:
                         self.frame = img
                         self.ok = True
@@ -164,8 +192,10 @@ class AVStreamReader:
 class StreamReader:
     """OpenCV 抓流（文件/摄像头/RTSP），后台线程只保留最新一帧。"""
 
-    def __init__(self, source):
+    def __init__(self, source, sample_fps=0):
         self.source = source
+        self.sample_interval = 1.0 / float(sample_fps) if sample_fps and sample_fps > 0 else 0.0
+        self.last_sample = 0.0
         self.cap = None
         self.lock = threading.Lock()
         self.frame = None
@@ -208,6 +238,11 @@ class StreamReader:
                 self.cap = None
                 time.sleep(1.0)
                 continue
+            if self.sample_interval:
+                now = time.monotonic()
+                if now - self.last_sample < self.sample_interval:
+                    continue
+                self.last_sample = now
             with self.lock:
                 self.frame = frame
                 self.ok = True
@@ -296,46 +331,123 @@ def put_latest(pending, item):
         pending.put_nowait(item)
 
 
+def annotate_result(result, calibration, info, width=960):
+    """Draw boxes on a downscaled frame; recording and preview use this cheaper path."""
+    img = result.orig_img
+    height, source_width = img.shape[:2]
+    if source_width > width:
+        scale = width / source_width
+        annotated = cv2.resize(img, (width, max(1, round(height * scale))),
+                               interpolation=cv2.INTER_AREA)
+    else:
+        scale = 1.0
+        annotated = img.copy()
+    boxes = result.boxes
+    if boxes is not None and len(boxes):
+        def as_numpy(value):
+            return value.cpu().numpy() if hasattr(value, "cpu") else np.asarray(value)
+        xyxy = as_numpy(boxes.xyxy)
+        confidences = as_numpy(boxes.conf)
+        classes = as_numpy(boxes.cls)
+        for (x1, y1, x2, y2), confidence, class_id in zip(xyxy, confidences, classes):
+            p1 = (int(x1 * scale), int(y1 * scale))
+            p2 = (int(x2 * scale), int(y2 * scale))
+            cv2.rectangle(annotated, p1, p2, (0, 255, 0), 2)
+            label = f"{result.names[int(class_id)]} {float(confidence):.2f}"
+            (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, .6, 2)
+            top = max(th + baseline, p1[1] - 5)
+            cv2.rectangle(annotated, (p1[0], top - th - baseline),
+                          (p1[0] + tw + 2, top + baseline), (0, 0, 0), -1)
+            cv2.putText(annotated, label, (p1[0] + 1, top),
+                        cv2.FONT_HERSHEY_SIMPLEX, .6, (0, 255, 0), 2, cv2.LINE_AA)
+    draw_calibration(annotated, calibration)
+    cv2.rectangle(annotated, (0, 0), (330, 26), (0, 0, 0), -1)
+    cv2.putText(annotated, info, (6, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                (0, 255, 0), 2, cv2.LINE_AA)
+    return annotated
+
+
 def _encode_worker(st):
     """每路一个画框+JPEG编码线程；队列满丢旧帧（预览宁缺不滞）。"""
-    while not STOP.is_set():
-        try:
-            item = st["q"].get(timeout=0.5)
-        except queue.Empty:
-            continue
-        if item is None:
-            break
-        frame, result, info = item
-        st["hub"].set_raw(result.orig_img)
-        # 标签缩小一档，960 宽预览的框线仍保持约 2.5px。
-        line_width = max(3, round(2.5 * result.orig_img.shape[1] / 960))
-        annotated = result.plot(line_width=line_width, pil=False,
-                                boxes=True, labels=True, conf=True, probs=False)
-        calibration = st["calibration_store"].get(st["camera_key"])
-        draw_calibration(annotated, calibration)
-        cv2.rectangle(annotated, (0, 0), (330, 26), (0, 0, 0), -1)
-        cv2.putText(annotated, info, (6, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                    (0, 255, 0), 2, cv2.LINE_AA)
-        st["hub"].set(annotated)
+    try:
+        while not STOP.is_set():
+            try:
+                item = st["q"].get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            frame, result, info = item
+            st["hub"].set_raw(result.orig_img)
+            recorder = st.get("recorder")
+            need_preview = st["hub"].has_viewers()
+            if recorder is None and not need_preview:
+                METRICS.bump("preview_skip")
+                continue
+            now = time.monotonic()
+            preview_due = need_preview and now - st.get("preview_at", 0.0) >= 1 / 10
+            record_due = (recorder is not None
+                          and now - st.get("record_at", 0.0) >= 1 / st.get("record_fps", 10))
+            if not preview_due and not record_due:
+                METRICS.bump("preview_skip")
+                continue
+            if preview_due:
+                st["preview_at"] = now
+            if record_due:
+                st["record_at"] = now
+            started = time.perf_counter()
+            calibration = st["calibration_store"].get(st["camera_key"])
+            annotated = annotate_result(result, calibration, info)
+            METRICS.add("annotate", time.perf_counter() - started)
+            if record_due:
+                started = time.perf_counter()
+                try:
+                    recorder.write(annotated)
+                except Exception as error:
+                    print(f"[录像失败] {st.get('url')}: {error}", flush=True)
+                    recorder.close()
+                    st["recorder"] = None
+                METRICS.add("record", time.perf_counter() - started)
+            if preview_due:
+                started = time.perf_counter()
+                st["hub"].set(annotated)
+                METRICS.add("preview", time.perf_counter() - started)
+    finally:
+        recorder = st.get("recorder")
+        if recorder is not None:
+            recorder.close()
 
 
 def draw_calibration(frame, calibration):
     h, w = frame.shape[:2]
     if not calibration_matches_frame(calibration, [w, h]):
         return
+    scale = max(1, w / 960)
+    stroke = max(2, round(2 * scale))
     points = lambda values: np.rint(np.asarray(values) * [w - 1, h - 1]).astype(np.int32)
     roi = points(calibration["roi"])
-    cv2.polylines(frame, [roi], True, (110, 231, 183), 2, cv2.LINE_AA)
+    cv2.polylines(frame, [roi], True, (110, 231, 183), stroke, cv2.LINE_AA)
     cv2.putText(frame, "ROI", tuple(roi[0]), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (110, 231, 183), 2, cv2.LINE_AA)
     if calibration["line"]:
         a, b = points(calibration["line"])
-        cv2.line(frame, tuple(a), tuple(b), (36, 191, 251), 2, cv2.LINE_AA)
+        # Draw at source scale so the finish line stays visible in the 960-pixel preview.
+        line_stroke = max(3, round(3 * scale))
+        cv2.line(frame, tuple(a), tuple(b), (0, 0, 0), line_stroke + 2 * stroke, cv2.LINE_AA)
+        cv2.line(frame, tuple(a), tuple(b), (36, 191, 251), line_stroke, cv2.LINE_AA)
+        font_scale = .6 * scale
+        (tw, th), baseline = cv2.getTextSize("FINISH", cv2.FONT_HERSHEY_SIMPLEX, font_scale, stroke)
+        tx = max(0, min(w - tw - 1, int((a[0] + b[0]) / 2 - tw / 2)))
+        ty = max(th + baseline, min(h - baseline - 1, int((a[1] + b[1]) / 2 - 10 * scale)))
+        cv2.rectangle(frame, (tx, ty - th - baseline), (tx + tw, ty + baseline), (0, 0, 0), -1)
+        cv2.putText(frame, "FINISH", (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                    font_scale, (36, 191, 251), stroke, cv2.LINE_AA)
         for label, point in zip(("A", "B"), (a, b)):
-            cv2.circle(frame, tuple(point), 4, (36, 191, 251), -1)
-            cv2.putText(frame, label, tuple(point), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (36, 191, 251), 2, cv2.LINE_AA)
+            cv2.circle(frame, tuple(point), round(4 * scale), (36, 191, 251), -1)
+            cv2.putText(frame, label, tuple(point), cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                        (36, 191, 251), stroke, cv2.LINE_AA)
     if calibration["direction"]:
         a, b = points(calibration["direction"])
-        cv2.arrowedLine(frame, tuple(a), tuple(b), (249, 232, 103), 2, cv2.LINE_AA, tipLength=0.2)
+        cv2.arrowedLine(frame, tuple(a), tuple(b), (249, 232, 103), stroke, cv2.LINE_AA, tipLength=0.2)
 
 
 def parse_crop(s):
@@ -405,7 +517,7 @@ class MJPEGHandler(TrafficHandlerMixin, CalibrationHandlerMixin, BaseHTTPRequest
             if idx is None or not (0 <= idx < len(self.hubs)):
                 self.send_error(404)
                 return
-            data = self.hubs[idx].get()
+            data = self.hubs[idx].get_raw()
             if data is None:
                 self.send_error(503, "no frame yet")
             else:
@@ -422,6 +534,7 @@ class MJPEGHandler(TrafficHandlerMixin, CalibrationHandlerMixin, BaseHTTPRequest
             self.send_header("Pragma", "no-cache")
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
             self.end_headers()
+            hub.viewer_enter()
             try:
                 last_seq, last_sent = -1, 0.0
                 while not STOP.is_set():
@@ -443,6 +556,8 @@ class MJPEGHandler(TrafficHandlerMixin, CalibrationHandlerMixin, BaseHTTPRequest
                     time.sleep(0.003)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
+            finally:
+                hub.viewer_leave()
         else:
             self.send_error(404)
 
@@ -474,12 +589,32 @@ def main():
                     default=Path(__file__).with_name("camera_regions.json"))
     ap.add_argument("--events-db", type=Path,
                     default=Path(__file__).parent / "output" / "traffic_events.sqlite3")
+    ap.add_argument("--counts-webhook-url", default=os.environ.get("COUNTS_WEBHOOK_URL", ""),
+                    help="累计车辆数量的 HTTP POST 接收地址；也可设置 COUNTS_WEBHOOK_URL")
     ap.add_argument("--jpeg-quality", type=int, default=80)
     ap.add_argument("--backend", choices=["auto", "av", "cv2"], default="auto",
                     help="抓流后端：auto=有 av 就优先用 PyAV（RTSP 更稳），否则 cv2")
     ap.add_argument("--crop", default="none",
                     help='裁剪后推理：none | left | right | "x1 y1 x2 y2"(归一化比例，如 "0 0 0.5 1")')
+    ap.add_argument("--sample-fps", type=float, default=10.0,
+                    help="每路主动抽帧后的处理帧率；0 表示不限制")
+    ap.add_argument("--batch-size", type=int, default=8,
+                    help="每轮推理尽量凑齐的帧数")
+    ap.add_argument("--batch-wait-ms", type=float, default=0,
+                    help="凑批最多等待时间；0 表示不等待")
+    ap.add_argument("--record-dir", default="", help="带预测框的抽帧 MP4 保存目录；空表示不录像")
+    ap.add_argument("--record-fps", type=float, default=0, help="录像帧率；默认跟随 --sample-fps")
+    ap.add_argument("--record-segment-minutes", type=float, default=10)
+    ap.add_argument("--record-keep-segments", type=int, default=6)
     args = ap.parse_args()
+    if args.sample_fps < 0:
+        ap.error("--sample-fps 必须 >= 0")
+    if args.batch_size < 1 or args.batch_wait_ms < 0:
+        ap.error("--batch-size 必须 >= 1，--batch-wait-ms 必须 >= 0")
+    if args.record_fps <= 0:
+        args.record_fps = args.sample_fps or 10.0
+    if args.record_segment_minutes <= 0 or args.record_keep_segments < 1:
+        ap.error("录像分段和保留数量必须为正数")
 
     urls = load_sources(args)
 
@@ -528,15 +663,25 @@ def main():
         print("[视频解码] CUDA/NVDEC；不支持硬解的编码使用 CPU。")
 
     streams = []
-    event_store = EventStore(args.events_db)
+    event_store = EventStore(args.events_db, model.names)
+    publisher = (CountsPublisher(event_store, [(camera_key(u, crop), cam_name(str(u))) for u in urls],
+                                 args.counts_webhook_url, STOP, os.environ.get("COUNTS_WEBHOOK_TOKEN", ""))
+                 if args.counts_webhook_url else None)
     for u in urls:
-        reader = AVStreamReader(u, hwaccel=hwaccel) if backend == "av" else StreamReader(u)
+        reader = (AVStreamReader(u, hwaccel=hwaccel, sample_fps=args.sample_fps)
+                  if backend == "av" else StreamReader(u, sample_fps=args.sample_fps))
         hub = FrameHub(quality=args.jpeg_quality)
         hub.set(placeholder("等待视频流..."))
+        name = cam_name(str(u))
         st = {"url": u, "reader": reader, "hub": hub, "seen": -1,
               "camera_key": camera_key(u, crop), "calibration_store": calibration_store,
-              "fps": 0.0, "t_prev": time.time(), "q": queue.Queue(maxsize=1)}
-        st["traffic"] = TrafficCamera(st["camera_key"], cam_name(str(u)), calibration_store, event_store)
+              "fps": 0.0, "t_prev": time.time(), "q": queue.Queue(maxsize=1),
+              "record_fps": args.record_fps,
+              "recorder": (VideoRecorder(args.record_dir, name, fps=args.record_fps,
+                                         segment_seconds=args.record_segment_minutes * 60,
+                                         keep_segments=args.record_keep_segments)
+                           if args.record_dir else None)}
+        st["traffic"] = TrafficCamera(st["camera_key"], name, calibration_store, event_store)
         st["worker"] = threading.Thread(target=_encode_worker, args=(st,), daemon=True)
         st["worker"].start()
         streams.append(st)
@@ -569,24 +714,33 @@ def main():
     common = dict(conf=args.conf, iou=args.iou, imgsz=args.imgsz,
                   device=args.device, verbose=False, classes=args.classes, **prec)
     last_warn_t = 0.0
+    last_timing_t = time.monotonic()
+    if publisher:
+        publisher.start()
     try:
         with torch.no_grad():
             while not STOP.is_set():
                 # 攒齐各路新帧 → 一次批量推理；画框/编码交给各路工作线程并行做
                 jobs = []
-                for st in streams:
-                    frame, sequence, received_at, generation = read_sample(st["reader"])
-                    if frame is None or st["seen"] == sequence:
-                        continue
-                    st["seen"] = sequence
-                    if crop is not None:
-                        h, w = frame.shape[:2]
-                        x1f, y1f, x2f, y2f = crop
-                        frame = frame[int(y1f * h):int(y2f * h), int(x1f * w):int(x2f * w)]
-                    jobs.append((st, frame, received_at, generation))
+                batch_deadline = time.monotonic() + args.batch_wait_ms / 1000
+                while not STOP.is_set():
+                    for st in streams:
+                        frame, sequence, received_at, generation = read_sample(st["reader"])
+                        if frame is None or st["seen"] == sequence:
+                            continue
+                        st["seen"] = sequence
+                        if crop is not None:
+                            h, w = frame.shape[:2]
+                            x1f, y1f, x2f, y2f = crop
+                            frame = frame[int(y1f * h):int(y2f * h), int(x1f * w):int(x2f * w)]
+                        jobs.append((st, frame, received_at, generation))
+                    if len(jobs) >= args.batch_size or time.monotonic() >= batch_deadline:
+                        break
+                    time.sleep(0.005)
 
                 if jobs:
                     now = time.time()
+                    started = time.perf_counter()
                     try:
                         # ByteTrack needs low-confidence detections to reconnect existing tracks.
                         results = model.predict([job[1] for job in jobs], **dict(common, conf=min(args.conf, .1)))
@@ -594,8 +748,11 @@ def main():
                         print(f"[推理异常] {e}")
                         results = None
                     if results is not None:
+                        METRICS.add("infer", time.perf_counter() - started, len(jobs))
                         for (st, _, received_at, generation), res in zip(jobs, results):
+                            started = time.perf_counter()
                             tracks = st["traffic"].process(res, received_at, generation)
+                            METRICS.add("track", time.perf_counter() - started)
                             if args.track and len(tracks):
                                 res = res[tracks[:, -1].astype(int)]
                                 res.update(boxes=tracks[:, :-1])
@@ -616,10 +773,15 @@ def main():
                     time.sleep(0.01)
                 for st in streams:
                     st["traffic"].flush(time.monotonic())
+                if time.monotonic() - last_timing_t >= 10:
+                    METRICS.report()
+                    last_timing_t = time.monotonic()
     except KeyboardInterrupt:
         pass
     finally:
         STOP.set()
+        if publisher:
+            publisher.join()
         for st in streams:
             st["reader"].stop()
             put_latest(st["q"], None)

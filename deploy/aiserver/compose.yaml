@@ -20,14 +20,30 @@ services:
       - --events-db
       - /data/traffic_events.sqlite3
       - --imgsz
-      - "960"
+      - "640"
       - --half
       - --device
       - "0"
       - --port
       - "8000"
+      - --sample-fps
+      - "8"
+      - --batch-size
+      - "8"
+      - --batch-wait-ms
+      - "0"
+      - --record-dir
+      - /data/recordings
+      - --record-fps
+      - "5"
+      - --record-segment-minutes
+      - "2"
+      - --record-keep-segments
+      - "30"
     environment:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+      COUNTS_WEBHOOK_URL: ${COUNTS_WEBHOOK_URL:-}
+      COUNTS_WEBHOOK_TOKEN: ${COUNTS_WEBHOOK_TOKEN:-}
     deploy:
       resources:
         reservations:

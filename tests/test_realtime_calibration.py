@@ -28,6 +28,7 @@ class PreviewCalibrationTests(unittest.TestCase):
                                  dtype=np.float32)
                 result = Results(frame, path='fixture.jpg', names={0: 'Private Car'}, boxes=boxes.copy())
                 hub = FrameHub()
+                hub.viewer_enter()
                 pending = queue.Queue()
                 pending.put((None, result, 'FPS 8.0'))
                 pending.put(None)
@@ -38,7 +39,9 @@ class PreviewCalibrationTests(unittest.TestCase):
                 preview = cv2.imdecode(np.frombuffer(hub.get(), dtype=np.uint8), cv2.IMREAD_COLOR)
                 edge_columns = preview[200:230, 99:102].max(axis=2).mean(axis=0)
                 self.assertTrue(np.all(edge_columns > 100), edge_columns)
-                self.assertGreater(preview[130:135, 110:180].max(axis=2).mean(), 80)
+                label_region = preview[110:160, 100:300]
+                self.assertGreater(label_region.max(), 200)
+                self.assertGreater((label_region.max(axis=2) > 150).sum(), 50)
                 self.assertEqual(int(frame.sum()), 0)
                 np.testing.assert_array_equal(result.boxes.data, boxes)
 
@@ -58,6 +61,31 @@ class PreviewCalibrationTests(unittest.TestCase):
         hub.set(small)
         self.assertEqual(cv2.imdecode(np.frombuffer(hub.get(), dtype=np.uint8), cv2.IMREAD_COLOR).shape,
                          small.shape)
+
+    def test_preview_encoding_is_skipped_until_a_viewer_connects(self):
+        from ultralytics.engine.results import Results
+        frame = np.zeros((180, 320, 3), dtype=np.uint8)
+        result = Results(frame, path='fixture.jpg', names={0: 'Private Car'},
+                         boxes=np.zeros((0, 6), dtype=np.float32))
+        hub = FrameHub()
+        pending = queue.Queue()
+        pending.put((None, result, 'FPS 8.0'))
+        pending.put(None)
+        state = {'q': pending, 'hub': hub, 'camera_key': 'fixture',
+                 'calibration_store': CalibrationStore(Path(tempfile.mkdtemp()) / 'regions.json')}
+        with patch.object(realtime_web, 'STOP', threading.Event()):
+            realtime_web._encode_worker(state)
+        self.assertIsNone(hub.get())
+        self.assertIsNotNone(hub.get_raw())
+
+        hub.viewer_enter()
+        pending.put((None, result, 'FPS 8.0'))
+        pending.put(None)
+        with patch.object(realtime_web, 'STOP', threading.Event()):
+            realtime_web._encode_worker(state)
+        self.assertIsNotNone(hub.get())
+        hub.viewer_leave()
+        self.assertFalse(hub.has_viewers())
 
     def test_busy_preview_keeps_newest_frame_and_accepts_shutdown(self):
         pending = queue.Queue(maxsize=1)

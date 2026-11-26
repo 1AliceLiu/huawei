@@ -5,14 +5,21 @@
 ## 调用 API
 
 ```text
-GET https://192.168.1.25:18090/api/traffic/cameras
-GET https://192.168.1.25:18090/api/traffic/events?after=0&limit=100
+GET https://supervisor-cx5200-v5.tailb2db87.ts.net:10000/api/traffic/cameras
+GET https://supervisor-cx5200-v5.tailb2db87.ts.net:10000/api/traffic/events?after=0&limit=100
+GET https://supervisor-cx5200-v5.tailb2db87.ts.net:10000/api/traffic/counts
 Authorization: Bearer <访问凭证>
 ```
 
-本机 `output/aiserver/access.json` 保存地址和凭证，`output/aiserver/aiserver.crt` 是该 HTTPS 入口的自签名证书。调用方需信任随附证书。凭证文件应通过私密渠道交给获准调用的接收方。
+公网入口由本机 Tailscale Funnel 提供，使用 Let's Encrypt 公共证书，仅暴露 TCP 10000，无需路由器端口映射。内网入口仍为 `https://192.168.1.25:18090`。
 
-证书签发时设置了 365 天有效期，续期后需向调用方更新信任证书。
+```sh
+tailscale funnel status
+tailscale funnel --https=10000 off   # 关闭公网入口
+tailscale funnel --bg --https=10000 https+insecure://192.168.1.25:18090   # 重新开启
+```
+
+`output/aiserver/customer_delivery/access.json` 保存公网地址和凭证，通过私密渠道交付；本机 `output/aiserver/access.json` 继续使用内网地址。公网访问不需要 `aiserver.crt`；该证书仅用于内网自签名入口，签发时设置了 365 天有效期，续期后需向调用方更新信任证书。
 
 在项目根目录运行以下 Python 示例即可验证证书并读取事件。
 
@@ -24,7 +31,9 @@ from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
 folder = Path("output/aiserver")
 access = json.loads((folder / "access.json").read_text(encoding="utf-8"))
-context = ssl.create_default_context(cafile=str(folder / access["certificate_file"]))
+certificate = access.get("certificate_file")
+context = ssl.create_default_context(
+    cafile=str(folder / certificate) if certificate else None)
 client = build_opener(ProxyHandler({}), HTTPSHandler(context=context))
 request = Request(
     access["base_url"] + "/api/traffic/events?after=0&limit=100",
@@ -36,7 +45,17 @@ with client.open(request, timeout=15) as response:
 
 事件字段与游标规则见 [车辆事件 API](../../docs/traffic_api.md)。服务器使用独立事件库，从本次部署开始累计。消费端应为这个服务器地址单独保存游标。
 
-当前入口绑定服务器的内网地址。公网接入还需要可达的网络入口及相应域名证书。
+累计数量接口按摄像头、最终类别统计全部已入库过线事件，包含历史记录，重启不清零。完整字段及覆盖更新规则见上述 API 文档。
+
+## 持续推送累计数量
+
+在服务器 `/opt/huawei-traffic/.env` 中设置 `COUNTS_WEBHOOK_URL=<对方接收地址>`，有接收方鉴权时再设置 `COUNTS_WEBHOOK_TOKEN=<接收方 token>`。该文件仅允许管理员读取，不提交到代码库。修改后重建 worker 和 gateway 容器使环境变量生效；镜像无变化时不必重新构建。
+
+发送端每秒检查一次，在数量变化后 POST 完整快照，失败自动重试，确认状态保存在事件库内。生产接收端须正确处理 Idempotency-Key 和 revision，并在可靠保存后返回 2xx。
+
+本机 `counts-receiver` 验证服务已移除，`.env` 中的 `COUNTS_WEBHOOK_URL` 也已清空，worker 不再尝试推送。如需临时本地验证，可单独运行 `scripts/receive_traffic_counts.py --host 127.0.0.1 --folder <目录>`，不要再作为 Compose 服务常驻。原有 HTTPS 访问 token 与接收方 token 用途不同，不应混用。
+
+公网查询入口为 `https://supervisor-cx5200-v5.tailb2db87.ts.net:10000`，由 Tailscale Funnel 转发到本机 `192.168.1.25:18090`。Funnel 配置保存在 tailscaled 状态中，机器重启后仍生效；公网证书由 Tailscale 自动续期。
 
 ## 文件与运行方式
 

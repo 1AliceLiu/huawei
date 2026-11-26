@@ -4,9 +4,10 @@ RUN python -m pip install --no-cache-dir --no-deps --force-reinstall \
     ultralytics==8.4.130 av==19.0.1 lap==0.5.13
 
 WORKDIR /app
-COPY realtime_web.py region_calibration.py traffic_api.py traffic_count.py record_traffic.py ./
+COPY realtime_web.py region_calibration.py traffic_api.py traffic_count.py traffic_push.py record_traffic.py stage_timing.py video_recorder.py ./
 COPY web/ ./web/
 COPY tests/ ./tests/
+COPY scripts/receive_traffic_counts.py ./scripts/receive_traffic_counts.py
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
